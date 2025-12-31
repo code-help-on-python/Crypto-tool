@@ -23,7 +23,7 @@ const isGithubPages =
     location.pathname.startsWith(ALLOWED_PATH_PREFIX + "/")
   );
 
-const licensed = isLocal || isGithubPages;
+const licensed = isGithubPages;
 
 if (!licensed) {
   // 🔒 lock the app
