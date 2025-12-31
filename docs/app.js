@@ -11,12 +11,17 @@ const SALT_LEN = 16;
 const KDF_ITERS = 200000;
 
 // 🔒 Domain lock (edit this!)
-const ALLOWED_HOSTS = [
-  "localhost",
-  "127.0.0.1",
-  // Example: "chanithacri.github.io",
-  // Example: "your-custom-domain.com",
-];
+const ALLOWED_HOSTS = ["code-help-on-python.github.io", "localhost", "127.0.0.1"];
+const ALLOWED_PATH_PREFIX = "/Crypto-tool/";
+
+const licensed =
+  ALLOWED_HOSTS.includes(location.hostname) &&
+  (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.pathname.startsWith(ALLOWED_PATH_PREFIX));
+
+if (!licensed) {
+  // lock the app
+}
+
 
 const LS_THEME = "cryptoshield-theme";
 const LS_ACCEPTED = "cryptoshield-accepted-v1";
