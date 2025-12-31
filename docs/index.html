@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Client-side CryptoShield encrypt/decrypt for CSP1 tokens. No server, no upload." />
+
+    <!--
+      NOTE: This is a static GitHub Pages site. Any front-end code shipped to a browser can be viewed.
+      The CSP below is for hardening, not for hiding the source.
+    -->
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; connect-src 'none'">
+
+    <title>CryptoShield Web</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="panel" aria-label="CryptoShield Web">
+        <header class="hero">
+          <div>
+            <div class="brand">CryptoShield</div>
+            <div class="tag">Web Encrypt / Decrypt</div>
+          </div>
+
+          <div class="header-actions">
+            <button id="about-open" class="ghost small" type="button">About</button>
+
+            <div class="theme-toggle" role="group" aria-label="Theme">
+              <button class="theme-btn active" data-theme="light" type="button">Light</button>
+              <button class="theme-btn" data-theme="dark" type="button">Dark</button>
+            </div>
+          </div>
+        </header>
+
+        <p class="lede">
+          Encrypt or decrypt CryptoShield text tokens in your browser. No server, no upload.
+        </p>
+
+        <div class="watermark" aria-hidden="true">Licensed for use on this page only</div>
+
+        <div class="tab-bar" role="tablist" aria-label="Mode">
+          <button class="tab active" data-tab="encrypt" role="tab" aria-selected="true">Encrypt</button>
+          <button class="tab" data-tab="decrypt" role="tab" aria-selected="false">Decrypt</button>
+        </div>
+
+        <div id="tab-decrypt" class="grid tab-panel" hidden>
+          <div class="field">
+            <label for="passphrase-decrypt">Passphrase</label>
+            <div class="input-row">
+              <input id="passphrase-decrypt" type="password" placeholder="Enter passphrase" autocomplete="current-password" />
+              <button class="toggle-pass" type="button" data-target="passphrase-decrypt">Show</button>
+            </div>
+          </div>
+
+          <div class="field full">
+            <label for="token">Encrypted Token</label>
+            <textarea id="token" rows="6" placeholder="Paste the CryptoShield token here"></textarea>
+          </div>
+
+          <div class="actions full">
+            <button id="decrypt" class="primary">Decrypt</button>
+            <button id="copy" class="ghost">Copy Output</button>
+            <button id="clear" class="ghost">Clear</button>
+          </div>
+
+          <div class="field full">
+            <label for="output">Plaintext</label>
+            <textarea id="output" rows="6" placeholder="Decrypted text appears here" readonly></textarea>
+          </div>
+
+          <div id="status" class="status full">Ready.</div>
+        </div>
+
+        <div id="tab-encrypt" class="grid tab-panel active">
+          <div class="field">
+            <label for="passphrase-encrypt">Passphrase</label>
+            <div class="input-row">
+              <input id="passphrase-encrypt" type="password" placeholder="Enter passphrase" autocomplete="new-password" />
+              <button class="toggle-pass" type="button" data-target="passphrase-encrypt">Show</button>
+            </div>
+          </div>
+
+          <div class="field full">
+            <label for="plaintext">Plaintext</label>
+            <textarea id="plaintext" rows="6" placeholder="Type your message here"></textarea>
+          </div>
+
+          <div class="actions full">
+            <button id="encrypt" class="primary">Encrypt</button>
+            <button id="copy-encrypt" class="ghost">Copy Token</button>
+            <button id="clear-encrypt" class="ghost">Clear</button>
+          </div>
+
+          <div class="field full">
+            <label for="token-out">Encrypted Token</label>
+            <textarea id="token-out" rows="6" placeholder="Encrypted token appears here" readonly></textarea>
+          </div>
+
+          <div id="status-encrypt" class="status full">Ready.</div>
+        </div>
+
+        <details class="help">
+          <summary>Format details</summary>
+          <p>
+            Token format: <code>base64url("CSP1" + 16-byte salt + fernet_token_string_bytes)</code>.
+            Key derivation: PBKDF2-HMAC-SHA256 (200,000 iterations). Encryption: Fernet (AES-128-CBC + HMAC-SHA256).
+          </p>
+        </details>
+
+        <footer class="legal">
+          <div class="legal-title">⚠️ Proprietary Software Notice</div>
+          <p>This tool is provided for use exclusively through this webpage.</p>
+          <p>Copying, inspecting, reusing, or redistributing the source code is prohibited by license.</p>
+          <p>© 2025 Chanitha. All rights reserved.</p>
+        </footer>
+      </section>
+    </main>
+
+    <noscript>
+      <div class="noscript">
+        This app requires JavaScript to run.
+      </div>
+    </noscript>
+
+    <!-- About modal -->
+    <div id="modal-about" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="about-title">
+        <div class="modal-head">
+          <h3 id="about-title">About</h3>
+          <button id="about-close" class="ghost small" type="button">Close</button>
+        </div>
+        <p>CryptoShield Web is a client-side encrypt/decrypt tool.</p>
+        <div class="notice">
+          <strong>⚠️ Proprietary Software Notice</strong>
+          <p>This tool is licensed for use exclusively through this webpage.</p>
+          <p>Copying, inspecting, reusing, or redistributing the source code is prohibited.</p>
+        </div>
+        <p class="muted">Nothing is uploaded. All processing happens in your browser.</p>
+      </div>
+    </div>
+
+    <!-- First-run notice -->
+    <div id="modal-first" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="first-title">
+        <div class="modal-head">
+          <h3 id="first-title">Before You Continue</h3>
+        </div>
+        <div class="notice">
+          <strong>⚠️ Proprietary Software Notice</strong>
+          <p>This tool is provided for use exclusively through this webpage.</p>
+          <p>Copying, inspecting, reusing, or redistributing the source code is prohibited.</p>
+        </div>
+        <button id="first-accept" class="primary" type="button">I Understand</button>
+      </div>
+    </div>
+
+    <!-- Devtools warning (deterrent only) -->
+    <div id="devtools-warning" class="modal-backdrop" hidden>
+      <div class="modal warning" role="dialog" aria-modal="true" aria-labelledby="devtools-title">
+        <div class="modal-head">
+          <h3 id="devtools-title">Developer Tools Detected</h3>
+        </div>
+        <p>Developer tools are not permitted for this page.</p>
+      </div>
+    </div>
+
+    <!-- Domain lock -->
+    <div id="origin-lock" class="modal-backdrop" hidden>
+      <div class="modal warning" role="dialog" aria-modal="true" aria-labelledby="origin-title">
+        <div class="modal-head">
+          <h3 id="origin-title">Unlicensed Domain</h3>
+        </div>
+        <p>This tool is licensed for use on its official domain only.</p>
+      </div>
+    </div>
+
+    <script src="docs/app.js"></script>
+  </body>
+</html>
