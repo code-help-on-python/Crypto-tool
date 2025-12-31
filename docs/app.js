@@ -247,7 +247,12 @@ async function decryptPayload(passphrase, payload) {
   }
 
   const salt = payloadBytes.slice(MAGIC.length, MAGIC.length + SALT_LEN);
-  const tokenRaw = payloadBytes.slice(MAGIC.length + SALT_LEN);
+  const tokenTextBytes = payloadBytes.slice(MAGIC.length + SALT_LEN);
+  const tokenText = new TextDecoder().decode(tokenTextBytes).trim();
+
+  // Decode Fernet base64 text → raw bytes
+  const tokenRaw = base64urlToBytes(tokenText);
+
 
   const { signingKey, encryptionKey } = await deriveKeys(passphrase, salt);
 
