@@ -6,47 +6,30 @@
 
 "use strict";
 
+/* =========================
+   BACKEND-COMPAT CONSTANTS
+========================= */
 const MAGIC = new TextEncoder().encode("CSP1");
 const SALT_LEN = 16;
+
+// ✅ MUST match your Python backend (per your uploaded backend)
 const KDF_ITERS = 200;
 
-const ALLOWED_HOSTS = [
-  "code-help-on-python.github.io",
-];
-
+/* =========================
+   DOMAIN LOCK CONFIG
+========================= */
+const ALLOWED_HOST = "code-help-on-python.github.io";
 const ALLOWED_PATH_PREFIX = "/Crypto-tool"; // no trailing slash
 
-const isGithubPages =
-  location.hostname === "code-help-on-python.github.io" &&
-  (
-    location.pathname === ALLOWED_PATH_PREFIX ||
-    location.pathname.startsWith(ALLOWED_PATH_PREFIX + "/")
-  );
-
-const licensed = isGithubPages;
-
-if (!licensed) {
-  // 🔒 lock the app
-  [decryptBtn, encryptBtn, copyBtn, copyEncBtn, clearBtn, clearEncBtn]
-    .forEach(b => b && (b.disabled = true));
-
-  setStatus(
-    "Unlicensed domain or path. This tool runs only on the official site.",
-    "err"
-  );
-  setStatusEnc(
-    "Unlicensed domain or path. This tool runs only on the official site.",
-    "err"
-  );
-
-  show(originModal);
-}
-
-
+/* =========================
+   LOCAL STORAGE
+========================= */
 const LS_THEME = "cryptoshield-theme";
 const LS_ACCEPTED = "cryptoshield-accepted-v1";
 
-// --- Elements ---
+/* =========================
+   ELEMENTS
+========================= */
 const passphraseDecrypt = document.getElementById("passphrase-decrypt");
 const tokenInput = document.getElementById("token");
 const outputBox = document.getElementById("output");
@@ -79,6 +62,9 @@ const firstAccept = document.getElementById("first-accept");
 const devtoolsModal = document.getElementById("devtools-warning");
 const originModal = document.getElementById("origin-lock");
 
+/* =========================
+   UI HELPERS
+========================= */
 function show(el) { if (el) el.hidden = false; }
 function hide(el) { if (el) el.hidden = true; }
 
@@ -107,7 +93,10 @@ function setTheme(theme) {
   safeLSSet(LS_THEME, normalized);
 }
 
-// --- Base64 helpers ---
+/* =========================
+   BASE64 URL HELPERS
+   ✅ Python-compatible (keeps '=')
+========================= */
 function base64urlToBytes(str) {
   const cleaned = (str || "").replace(/\s+/g, "");
   const b64 = cleaned.replace(/-/g, "+").replace(/_/g, "/");
@@ -117,24 +106,24 @@ function base64urlToBytes(str) {
   for (let i = 0; i < raw.length; i += 1) out[i] = raw.charCodeAt(i);
   return out;
 }
+
+// ✅ Keep '=' padding (Python urlsafe_b64encode keeps padding)
 function bytesToBase64Url(bytes) {
   let binary = "";
   for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-function bytesToAscii(bytes) {
-  let out = "";
-  for (let i = 0; i < bytes.length; i += 1) out += String.fromCharCode(bytes[i]);
-  return out;
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_");
 }
 
-// --- Crypto primitives ---
+/* =========================
+   CRYPTO PRIMITIVES
+========================= */
 function constantTimeEqual(a, b) {
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i += 1) diff |= a[i] ^ b[i];
   return diff === 0;
 }
+
 function pkcs7Unpad(data) {
   if (data.length === 0) throw new Error("Invalid padding.");
   const pad = data[data.length - 1];
@@ -144,6 +133,7 @@ function pkcs7Unpad(data) {
   }
   return data.slice(0, data.length - pad);
 }
+
 function pkcs7Pad(data) {
   const pad = 16 - (data.length % 16);
   const out = new Uint8Array(data.length + pad);
@@ -161,6 +151,7 @@ async function deriveKeys(passphrase, salt) {
     256
   );
   const keyBytes = new Uint8Array(bits);
+  // Fernet wants signing (16) + encryption (16) in this implementation
   return { signingKey: keyBytes.slice(0, 16), encryptionKey: keyBytes.slice(16, 32) };
 }
 
@@ -170,31 +161,35 @@ async function verifyHmac(signingKey, data, expected) {
   return constantTimeEqual(sig, expected);
 }
 
-async function decryptFernet(encryptionKey, iv, ciphertext) {
+async function decryptAesCbc(encryptionKey, iv, ciphertext) {
   const key = await crypto.subtle.importKey("raw", encryptionKey, { name: "AES-CBC" }, false, ["decrypt"]);
   const padded = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-CBC", iv }, key, ciphertext));
   return pkcs7Unpad(padded);
 }
 
 function parseFernetToken(tokenRaw) {
-  // minimal length: ver(1)+ts(8)+iv(16)+hmac(32)
+  // version(1) + ts(8) + iv(16) + hmac(32) minimal, ciphertext can be empty but realistically not
   if (tokenRaw.length < 1 + 8 + 16 + 32) throw new Error("Invalid token format.");
   const version = tokenRaw[0];
   if (version !== 0x80) throw new Error("Invalid token version.");
+
   const ivStart = 1 + 8;
   const hmacStart = tokenRaw.length - 32;
+
   const iv = tokenRaw.slice(ivStart, ivStart + 16);
   const ciphertext = tokenRaw.slice(ivStart + 16, hmacStart);
   const dataToSign = tokenRaw.slice(0, hmacStart);
   const hmac = tokenRaw.slice(hmacStart);
+
   return { iv, ciphertext, dataToSign, hmac };
 }
 
 async function encryptFernet(encryptionKey, signingKey, plaintextBytes) {
   const iv = crypto.getRandomValues(new Uint8Array(16));
   const padded = pkcs7Pad(plaintextBytes);
-  const key = await crypto.subtle.importKey("raw", encryptionKey, { name: "AES-CBC" }, false, ["encrypt"]);
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-CBC", iv }, key, padded));
+
+  const aesKey = await crypto.subtle.importKey("raw", encryptionKey, { name: "AES-CBC" }, false, ["encrypt"]);
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-CBC", iv }, aesKey, padded));
 
   const timestamp = Math.floor(Date.now() / 1000);
   let ts = BigInt(timestamp);
@@ -214,59 +209,14 @@ async function encryptFernet(encryptionKey, signingKey, plaintextBytes) {
   tokenRaw.set(dataToSign);
   tokenRaw.set(hmac, dataToSign.length);
 
-  return bytesToBase64Url(tokenRaw);
+  // NOTE: This returns the RAW Fernet token bytes (not base64 text).
+  return tokenRaw;
 }
 
-async function decryptPayload(passphrase, payload) {
-  if (!passphrase) throw new Error("Passphrase is required.");
-  if (!payload) throw new Error("Token is required.");
-
-  const payloadBytes = base64urlToBytes(payload);
-  if (payloadBytes.length < MAGIC.length + SALT_LEN + 1) throw new Error("Invalid token format.");
-
-  const magic = payloadBytes.slice(0, MAGIC.length);
-  for (let i = 0; i < MAGIC.length; i += 1) {
-    if (magic[i] !== MAGIC[i]) throw new Error("Invalid token format.");
-  }
-
-  const salt = payloadBytes.slice(MAGIC.length, MAGIC.length + SALT_LEN);
-  const tokenBytes = payloadBytes.slice(MAGIC.length + SALT_LEN);
-
-  const { signingKey, encryptionKey } = await deriveKeys(passphrase, salt);
-  let lastErr = null;
-
-  // ✅ Try both possible encodings for the inner Fernet token:
-  const tokenCandidates = [];
-
-  // A) If stored as raw Fernet bytes, it starts with 0x80 (Fernet version byte)
-  if (tokenBytes.length > 0 && tokenBytes[0] === 0x80) {
-    tokenCandidates.push(tokenBytes);
-  }
-
-  // B) If stored as ASCII text (base64url string), decode it
-  try {
-    const tokenStr = new TextDecoder().decode(tokenBytes).trim();
-    if (tokenStr) tokenCandidates.push(base64urlToBytes(tokenStr));
-  } catch (_) {
-    // ignore
-  }
-
-  for (const tokenRaw of tokenCandidates) {
-    try {
-      const { iv, ciphertext, dataToSign, hmac } = parseFernetToken(tokenRaw);
-      const ok = await verifyHmac(signingKey, dataToSign, hmac);
-      if (!ok) throw new Error("Wrong passphrase or corrupted token.");
-      const plaintextBytes = await decryptFernet(encryptionKey, iv, ciphertext);
-      return new TextDecoder().decode(plaintextBytes);
-    } catch (err) {
-      lastErr = err;
-    }
-  }
-
-  if (lastErr) throw lastErr;
-  throw new Error("Wrong passphrase or corrupted token.");
-
-
+/* =========================
+   PAYLOAD FORMAT (BACKEND)
+   ✅ base64url( MAGIC + salt(16) + fernet_raw_bytes )
+========================= */
 async function encryptPayload(passphrase, plaintext) {
   if (!passphrase) throw new Error("Passphrase is required.");
   if (!plaintext) throw new Error("Plaintext is required.");
@@ -274,18 +224,44 @@ async function encryptPayload(passphrase, plaintext) {
   const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
   const { signingKey, encryptionKey } = await deriveKeys(passphrase, salt);
 
-  const token = await encryptFernet(encryptionKey, signingKey, new TextEncoder().encode(plaintext));
-  const tokenBytes = new TextEncoder().encode(token);
+  const fernetRaw = await encryptFernet(encryptionKey, signingKey, new TextEncoder().encode(plaintext));
 
-  const payload = new Uint8Array(MAGIC.length + SALT_LEN + tokenBytes.length);
+  const payload = new Uint8Array(MAGIC.length + SALT_LEN + fernetRaw.length);
   payload.set(MAGIC, 0);
   payload.set(salt, MAGIC.length);
-  payload.set(tokenBytes, MAGIC.length + SALT_LEN);
+  payload.set(fernetRaw, MAGIC.length + SALT_LEN);
 
   return bytesToBase64Url(payload);
 }
 
-// --- UI wiring ---
+async function decryptPayload(passphrase, payload) {
+  if (!passphrase) throw new Error("Passphrase is required.");
+  if (!payload) throw new Error("Token is required.");
+
+  const payloadBytes = base64urlToBytes(payload);
+  if (payloadBytes.length < MAGIC.length + SALT_LEN + (1 + 8 + 16 + 32)) throw new Error("Invalid token format.");
+
+  // Verify MAGIC
+  for (let i = 0; i < MAGIC.length; i += 1) {
+    if (payloadBytes[i] !== MAGIC[i]) throw new Error("Invalid token format.");
+  }
+
+  const salt = payloadBytes.slice(MAGIC.length, MAGIC.length + SALT_LEN);
+  const tokenRaw = payloadBytes.slice(MAGIC.length + SALT_LEN);
+
+  const { signingKey, encryptionKey } = await deriveKeys(passphrase, salt);
+
+  const { iv, ciphertext, dataToSign, hmac } = parseFernetToken(tokenRaw);
+  const ok = await verifyHmac(signingKey, dataToSign, hmac);
+  if (!ok) throw new Error("Wrong passphrase or corrupted token.");
+
+  const plaintextBytes = await decryptAesCbc(encryptionKey, iv, ciphertext);
+  return new TextDecoder().decode(plaintextBytes);
+}
+
+/* =========================
+   UI: TABS
+========================= */
 tabButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
     tabButtons.forEach((b) => {
@@ -307,8 +283,14 @@ tabButtons.forEach((btn) => {
   });
 });
 
+/* =========================
+   UI: THEME
+========================= */
 themeButtons.forEach((btn) => btn.addEventListener("click", () => setTheme(btn.dataset.theme)));
 
+/* =========================
+   UI: SHOW/HIDE PASS
+========================= */
 togglePassButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
     const input = document.getElementById(btn.dataset.target);
@@ -319,7 +301,9 @@ togglePassButtons.forEach((btn) => {
   });
 });
 
-// Encrypt / Decrypt actions
+/* =========================
+   UI: ACTIONS
+========================= */
 decryptBtn.addEventListener("click", async () => {
   setStatus("Decrypting...", "");
   outputBox.value = "";
@@ -390,7 +374,9 @@ clearEncBtn.addEventListener("click", () => {
   setStatusEnc("Cleared.", "");
 });
 
-// --- Modals ---
+/* =========================
+   UI: MODALS
+========================= */
 if (aboutOpen && aboutModal) aboutOpen.addEventListener("click", () => show(aboutModal));
 if (aboutClose && aboutModal) aboutClose.addEventListener("click", () => hide(aboutModal));
 if (aboutModal) {
@@ -412,32 +398,41 @@ if (firstModal) {
   if (accepted !== "yes") show(firstModal);
 }
 
-// --- Domain lock ---
-function isLicensedDomain() {
-  // If ALLOWED_HOSTS only has localhost entries, treat it as "not configured yet".
-  const configured = ALLOWED_HOSTS.some((h) => h !== "localhost" && h !== "127.0.0.1");
-  if (!configured) return true;
+/* =========================
+   ✅ DOMAIN LOCK (RUNS AFTER EVERYTHING EXISTS)
+========================= */
+function isLicensed() {
+  // allow only your GH Pages + correct repo path
+  if (location.hostname !== ALLOWED_HOST) return false;
 
-  return ALLOWED_HOSTS.includes(location.hostname);
+  return (
+    location.pathname === ALLOWED_PATH_PREFIX ||
+    location.pathname.startsWith(ALLOWED_PATH_PREFIX + "/")
+  );
 }
 
-if (originModal && !isLicensedDomain()) {
+if (originModal && !isLicensed()) {
   show(originModal);
-  // Disable buttons to avoid any "free usage" on unlicensed domains.
-  [decryptBtn, encryptBtn, copyBtn, copyEncBtn, clearBtn, clearEncBtn].forEach((b) => { if (b) b.disabled = true; });
+  [decryptBtn, encryptBtn, copyBtn, copyEncBtn, clearBtn, clearEncBtn].forEach((b) => {
+    if (b) b.disabled = true;
+  });
+  setStatus("Unlicensed domain or path. This tool runs only on the official site.", "err");
+  setStatusEnc("Unlicensed domain or path. This tool runs only on the official site.", "err");
 }
 
-// --- Deterrents (NOT real protection) ---
+/* =========================
+   DETERRENTS (NOT REAL SECURITY)
+========================= */
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
 document.addEventListener("keydown", (e) => {
   const key = String(e.key || "").toLowerCase();
-  const ctrl = e.ctrlKey || e.metaKey; // Ctrl on Win/Linux, Cmd on macOS
+  const ctrl = e.ctrlKey || e.metaKey; // Ctrl (Win/Linux) / Cmd (macOS)
 
   const blocked =
     key === "f12" ||
-    (ctrl && key === "u") || // view-source
-    (ctrl && e.shiftKey && ["i", "j", "c"].includes(key)); // devtools shortcuts
+    (ctrl && key === "u") ||
+    (ctrl && e.shiftKey && ["i", "j", "c"].includes(key));
 
   if (blocked) {
     e.preventDefault();
@@ -464,7 +459,9 @@ setInterval(() => {
   }
 }, 800);
 
-// --- Boot ---
+/* =========================
+   BOOT
+========================= */
 setTheme(safeLSGet(LS_THEME) === "dark" ? "dark" : "light");
 
 const activeTab = document.querySelector(".tab.active");
