@@ -230,7 +230,7 @@ async function decryptPayload(passphrase, payload) {
   }
 
   const salt = payloadBytes.slice(MAGIC.length, MAGIC.length + SALT_LEN);
-  c  const tokenBytes = payloadBytes.slice(MAGIC.length + SALT_LEN);
+  const tokenBytes = payloadBytes.slice(MAGIC.length + SALT_LEN);
 
   const { signingKey, encryptionKey } = await deriveKeys(passphrase, salt);
   let lastErr = null;
