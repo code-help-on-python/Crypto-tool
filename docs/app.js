@@ -3,116 +3,67 @@
 /*
   CryptoShield Web (client-side) - Python compatible
 
-  Outer token format:
-    payload = base64url( MAGIC("CSP1") + 16-byte salt + fernet_token_bytes )
+  Outer token format (CSP1):
+    payload = base64url( "CSP1" + 16-byte salt + fernet_token_ascii_bytes )
 
-  Python's Fernet token is base64url ASCII bytes.
+  Python Fernet token is a base64url ASCII string. In CSP1 we store those ASCII bytes directly.
   So in JS we must:
     1) base64url-decode payload
-    2) verify MAGIC
+    2) verify MAGIC "CSP1"
     3) extract salt
-    4) extract fernet_token_bytes_ascii
-    5) convert ascii bytes -> string, REMOVE WHITESPACE
-    6) base64url-decode fernet string -> raw fernet bytes
-    7) verify HMAC (SHA256) using signing key
-    8) AES-CBC decrypt using encryption key
-    9) PKCS7 unpad
+    4) extract fernet_token_ascii_bytes
+    5) convert ascii bytes -> string, REMOVE ALL WHITESPACE
+    6) base64url-decode the fernet string -> raw fernet bytes
+    7) derive key via PBKDF2-HMAC-SHA256 (200,000 iters) -> 32 bytes
+       signingKey = first 16, encryptionKey = last 16
+    8) verify HMAC-SHA256 over (version+timestamp+iv+ciphertext)
+    9) AES-128-CBC decrypt + PKCS7 unpad
 */
 
 const MAGIC = new TextEncoder().encode("CSP1");
 const SALT_LEN = 16;
-const KDF_ITERS = 200000; // ✅ MUST match Python (200_000)
+const KDF_ITERS = 200000; // MUST match Python (200_000)
 
-// Optional domain lock (deterrent)
-const ALLOWED_HOST = "code-help-on-python.github.io";
-const ALLOWED_PATH_PREFIX = "/Crypto-tool";
+// ---- Domain lock (deterrent only) ----
+const OFFICIAL_HOST = "code-help-on-python.github.io";
+const OFFICIAL_REPO = "Crypto-tool"; // repo name in URL
 
-function isLicensed() {
-  if (location.hostname !== ALLOWED_HOST) return false;
+function isLicensedOrigin() {
+  if (location.hostname !== OFFICIAL_HOST) return false;
 
-  // Normalize trailing slash
-  const path = location.pathname.replace(/\/+$/, "");
+  // Normalize GitHub Pages path variants:
+  //   /Crypto-tool
+  //   /Crypto-tool/
+  //   /Crypto-tool/index.html
+  const path = location.pathname
+    .replace(/\/index\.html$/i, "")
+    .replace(/\/+$/g, "");
 
-  return path === ALLOWED_PATH_PREFIX || path.startsWith(ALLOWED_PATH_PREFIX + "/");
+  return path === `/${OFFICIAL_REPO}` || path.startsWith(`/${OFFICIAL_REPO}/`);
 }
 
-// --- Elements ---
-const passphraseDecrypt = document.getElementById("passphrase-decrypt");
-const tokenInput = document.getElementById("token");
-const outputBox = document.getElementById("output");
-const statusEl = document.getElementById("status");
-const decryptBtn = document.getElementById("decrypt");
-const copyBtn = document.getElementById("copy");
-const clearBtn = document.getElementById("clear");
-
-const passphraseEncrypt = document.getElementById("passphrase-encrypt");
-const plaintextInput = document.getElementById("plaintext");
-const tokenOut = document.getElementById("token-out");
-const statusEncEl = document.getElementById("status-encrypt");
-const encryptBtn = document.getElementById("encrypt");
-const copyEncBtn = document.getElementById("copy-encrypt");
-const clearEncBtn = document.getElementById("clear-encrypt");
-
-const tabButtons = document.querySelectorAll(".tab");
-const tabPanels = document.querySelectorAll(".tab-panel");
-const themeButtons = document.querySelectorAll(".theme-btn");
-const togglePassButtons = document.querySelectorAll(".toggle-pass");
-
-const aboutOpen = document.getElementById("about-open");
-const aboutClose = document.getElementById("about-close");
-const aboutModal = document.getElementById("modal-about");
-
-const originModal = document.getElementById("origin-lock");
-
-function show(el) { if (el) el.hidden = false; }
-function hide(el) { if (el) el.hidden = true; }
-
-// --- Status helpers ---
-function setStatus(text, type) {
-  statusEl.textContent = text;
-  statusEl.classList.remove("ok", "err");
-  if (type) statusEl.classList.add(type);
-}
-function setStatusEnc(text, type) {
-  statusEncEl.textContent = text;
-  statusEncEl.classList.remove("ok", "err");
-  if (type) statusEncEl.classList.add(type);
-}
-
-// --- Theme ---
+// ---- Storage / theme ----
 const LS_THEME = "cryptoshield-theme";
-function safeLSGet(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }
-function safeLSSet(key, val) { try { localStorage.setItem(key, val); } catch (_) {} }
+
+function safeLSGet(key) {
+  try { return localStorage.getItem(key); } catch (_) { return null; }
+}
+function safeLSSet(key, val) {
+  try { localStorage.setItem(key, val); } catch (_) {}
+}
 
 function setTheme(theme) {
   const normalized = theme === "dark" ? "dark" : "light";
   document.body.dataset.theme = normalized;
-  themeButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.theme === normalized));
+  themeButtons.forEach((btn) =>
+    btn.classList.toggle("active", btn.dataset.theme === normalized)
+  );
   safeLSSet(LS_THEME, normalized);
 }
-setTheme(safeLSGet(LS_THEME) === "dark" ? "dark" : "light");
 
-// --- Domain lock (deterrent only) ---
-function isLicensed() {
-  if (!ALLOWED_HOSTS.includes(location.hostname)) return false;
-  if (location.hostname === "localhost" || location.hostname === "127.0.0.1") return true;
-
-  return (
-    location.pathname === ALLOWED_PATH_PREFIX ||
-    location.pathname.startsWith(ALLOWED_PATH_PREFIX + "/")
-  );
-}
-
-if (!isLicensed()) {
-  [decryptBtn, encryptBtn, copyBtn, copyEncBtn, clearBtn, clearEncBtn].forEach((b) => { if (b) b.disabled = true; });
-  show(originModal);
-  setStatus("Unlicensed domain/path.", "err");
-  setStatusEnc("Unlicensed domain/path.", "err");
-}
-
-// --- Base64 helpers (urlsafe) ---
+// ---- Base64url helpers ----
 function base64urlToBytes(str) {
-  const cleaned = (str || "").replace(/\s+/g, ""); // ✅ remove ALL whitespace
+  const cleaned = String(str || "").replace(/\s+/g, ""); // REMOVE ALL WHITESPACE
   const b64 = cleaned.replace(/-/g, "+").replace(/_/g, "/");
   const pad = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4));
   const raw = atob(b64 + pad);
@@ -133,7 +84,7 @@ function bytesToAscii(bytes) {
   return out;
 }
 
-// --- Crypto primitives ---
+// ---- Crypto primitives ----
 function constantTimeEqual(a, b) {
   if (a.length !== b.length) return false;
   let diff = 0;
@@ -171,7 +122,13 @@ async function deriveKeyBytes(passphrase, salt) {
 }
 
 async function verifyHmac(signingKey, data, expected) {
-  const key = await crypto.subtle.importKey("raw", signingKey, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    signingKey,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
   const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, data));
   return constantTimeEqual(sig, expected);
 }
@@ -192,23 +149,25 @@ function parseFernetToken(raw) {
   // Fernet: version(1)=0x80 + timestamp(8) + iv(16) + ciphertext + hmac(32)
   if (raw.length < 1 + 8 + 16 + 32) throw new Error("Invalid Fernet token.");
   if (raw[0] !== 0x80) throw new Error("Invalid token version.");
+
   const ivStart = 1 + 8;
   const hmacStart = raw.length - 32;
+
   const iv = raw.slice(ivStart, ivStart + 16);
   const ciphertext = raw.slice(ivStart + 16, hmacStart);
   const dataToSign = raw.slice(0, hmacStart);
   const hmac = raw.slice(hmacStart);
+
   return { iv, ciphertext, dataToSign, hmac };
 }
 
-// --- Payload handling (Python-compatible) ---
+// ---- CSP1 decrypt/encrypt ----
 async function decryptPayload(passphrase, payload) {
   if (!passphrase) throw new Error("Passphrase is required.");
   if (!payload) throw new Error("Token is required.");
 
-  // ✅ remove ALL whitespace from outer payload
-  const payloadClean = String(payload).replace(/\s+/g, "");
-  const payloadBytes = base64urlToBytes(payloadClean);
+  // Outer payload is base64url (may include pasted whitespace)
+  const payloadBytes = base64urlToBytes(String(payload));
 
   if (payloadBytes.length < MAGIC.length + SALT_LEN + 10) throw new Error("Invalid token format.");
 
@@ -219,7 +178,7 @@ async function decryptPayload(passphrase, payload) {
   const salt = payloadBytes.slice(MAGIC.length, MAGIC.length + SALT_LEN);
   const fernetAsciiBytes = payloadBytes.slice(MAGIC.length + SALT_LEN);
 
-  // ✅ CRITICAL FIX: remove ALL whitespace inside the Fernet string too
+  // Inner Fernet token string (remove ALL whitespace inside too)
   const fernetStr = bytesToAscii(fernetAsciiBytes).replace(/\s+/g, "");
   const fernetRaw = base64urlToBytes(fernetStr);
 
@@ -236,7 +195,7 @@ async function decryptPayload(passphrase, payload) {
     const plaintextBytes = await decryptAesCbc(encryptionKey, iv, ciphertext);
     return new TextDecoder().decode(plaintextBytes);
   } catch (_) {
-    // ✅ Normalize padding failures (avoid confusing messages)
+    // Normalize padding / AES errors (they usually mean wrong key)
     throw new Error("Wrong password or corrupted token.");
   }
 }
@@ -253,29 +212,42 @@ async function encryptPayload(passphrase, plaintext) {
   const iv = crypto.getRandomValues(new Uint8Array(16));
   const ciphertext = await encryptAesCbc(encryptionKey, iv, new TextEncoder().encode(plaintext));
 
+  // timestamp (8 bytes big-endian)
   const timestamp = Math.floor(Date.now() / 1000);
   let ts = BigInt(timestamp);
   const tsBytes = new Uint8Array(8);
-  for (let i = 7; i >= 0; i -= 1) { tsBytes[i] = Number(ts & 0xffn); ts >>= 8n; }
+  for (let i = 7; i >= 0; i -= 1) {
+    tsBytes[i] = Number(ts & 0xffn);
+    ts >>= 8n;
+  }
 
+  // dataToSign = version + ts + iv + ciphertext
   const dataToSign = new Uint8Array(1 + 8 + 16 + ciphertext.length);
   dataToSign[0] = 0x80;
   dataToSign.set(tsBytes, 1);
   dataToSign.set(iv, 1 + 8);
   dataToSign.set(ciphertext, 1 + 8 + 16);
 
-  const hmacKey = await crypto.subtle.importKey("raw", signingKey, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  // hmac = HMAC-SHA256(signingKey, dataToSign)
+  const hmacKey = await crypto.subtle.importKey(
+    "raw",
+    signingKey,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
   const hmac = new Uint8Array(await crypto.subtle.sign("HMAC", hmacKey, dataToSign));
 
+  // fernetRaw = dataToSign + hmac
   const fernetRaw = new Uint8Array(dataToSign.length + hmac.length);
   fernetRaw.set(dataToSign);
   fernetRaw.set(hmac, dataToSign.length);
 
-  // Fernet token as base64url ASCII bytes (like Python)
+  // Fernet token string as base64url (ASCII)
   const fernetStr = bytesToBase64Url(fernetRaw);
   const fernetAsciiBytes = new TextEncoder().encode(fernetStr);
 
-  // Outer payload: MAGIC + salt + fernet_token_bytes
+  // Outer payload = MAGIC + salt + fernetAsciiBytes
   const payloadBytes = new Uint8Array(MAGIC.length + SALT_LEN + fernetAsciiBytes.length);
   payloadBytes.set(MAGIC, 0);
   payloadBytes.set(salt, MAGIC.length);
@@ -284,7 +256,59 @@ async function encryptPayload(passphrase, plaintext) {
   return bytesToBase64Url(payloadBytes);
 }
 
-// --- UI wiring ---
+// ---- UI: Elements ----
+const passphraseDecrypt = document.getElementById("passphrase-decrypt");
+const tokenInput = document.getElementById("token");
+const outputBox = document.getElementById("output");
+const statusEl = document.getElementById("status");
+const decryptBtn = document.getElementById("decrypt");
+const copyBtn = document.getElementById("copy");
+const clearBtn = document.getElementById("clear");
+
+const passphraseEncrypt = document.getElementById("passphrase-encrypt");
+const plaintextInput = document.getElementById("plaintext");
+const tokenOut = document.getElementById("token-out");
+const statusEncEl = document.getElementById("status-encrypt");
+const encryptBtn = document.getElementById("encrypt");
+const copyEncBtn = document.getElementById("copy-encrypt");
+const clearEncBtn = document.getElementById("clear-encrypt");
+
+const tabButtons = document.querySelectorAll(".tab");
+const tabPanels = document.querySelectorAll(".tab-panel");
+const themeButtons = document.querySelectorAll(".theme-btn");
+const togglePassButtons = document.querySelectorAll(".toggle-pass");
+
+const aboutOpen = document.getElementById("about-open");
+const aboutClose = document.getElementById("about-close");
+const aboutModal = document.getElementById("modal-about");
+
+const originModal = document.getElementById("origin-lock");
+
+function show(el) { if (el) el.hidden = false; }
+function hide(el) { if (el) el.hidden = true; }
+
+function setStatus(text, type) {
+  statusEl.textContent = text;
+  statusEl.classList.remove("ok", "err");
+  if (type) statusEl.classList.add(type);
+}
+function setStatusEnc(text, type) {
+  statusEncEl.textContent = text;
+  statusEncEl.classList.remove("ok", "err");
+  if (type) statusEncEl.classList.add(type);
+}
+
+// ---- Apply domain lock AFTER elements exist ----
+if (!isLicensedOrigin()) {
+  [decryptBtn, encryptBtn, copyBtn, copyEncBtn, clearBtn, clearEncBtn].forEach((b) => {
+    if (b) b.disabled = true;
+  });
+  show(originModal);
+  setStatus("Unlicensed domain/path.", "err");
+  setStatusEnc("Unlicensed domain/path.", "err");
+}
+
+// ---- Tabs ----
 tabButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
     tabButtons.forEach((b) => {
@@ -301,8 +325,10 @@ tabButtons.forEach((btn) => {
   });
 });
 
+// ---- Theme ----
 themeButtons.forEach((btn) => btn.addEventListener("click", () => setTheme(btn.dataset.theme)));
 
+// ---- Show/Hide pass ----
 togglePassButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
     const input = document.getElementById(btn.dataset.target);
@@ -313,14 +339,17 @@ togglePassButtons.forEach((btn) => {
   });
 });
 
-// Decrypt
+// ---- Actions: Decrypt ----
 decryptBtn.addEventListener("click", async () => {
   setStatus("Decrypting...", "");
   outputBox.value = "";
   decryptBtn.disabled = true;
 
   try {
-    const result = await decryptPayload(passphraseDecrypt.value.trim(), tokenInput.value);
+    const result = await decryptPayload(
+      passphraseDecrypt.value.trim(),
+      tokenInput.value // keep raw; our decoder strips whitespace safely
+    );
     outputBox.value = result;
     setStatus("Decrypted.", "ok");
   } catch (err) {
@@ -347,14 +376,17 @@ clearBtn.addEventListener("click", () => {
   setStatus("Cleared.", "");
 });
 
-// Encrypt
+// ---- Actions: Encrypt ----
 encryptBtn.addEventListener("click", async () => {
   setStatusEnc("Encrypting...", "");
   tokenOut.value = "";
   encryptBtn.disabled = true;
 
   try {
-    const token = await encryptPayload(passphraseEncrypt.value.trim(), plaintextInput.value.trim());
+    const token = await encryptPayload(
+      passphraseEncrypt.value.trim(),
+      plaintextInput.value.trim()
+    );
     tokenOut.value = token;
     setStatusEnc("Encrypted.", "ok");
   } catch (err) {
@@ -381,7 +413,16 @@ clearEncBtn.addEventListener("click", () => {
   setStatusEnc("Cleared.", "");
 });
 
-// About modal
+// ---- Modals ----
 if (aboutOpen && aboutModal) aboutOpen.addEventListener("click", () => show(aboutModal));
 if (aboutClose && aboutModal) aboutClose.addEventListener("click", () => hide(aboutModal));
-if (aboutModal) aboutModal.addEventListener("click", (e) => { if (e.target === aboutModal) hide(aboutModal); });
+if (aboutModal) {
+  aboutModal.addEventListener("click", (e) => {
+    if (e.target === aboutModal) hide(aboutModal);
+  });
+}
+
+// ---- Boot ----
+setTheme(safeLSGet(LS_THEME) === "dark" ? "dark" : "light");
+const activeTab = document.querySelector(".tab.active");
+if (activeTab) activeTab.click();
