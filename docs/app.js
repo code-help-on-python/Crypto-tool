@@ -19,6 +19,7 @@
     8) verify HMAC-SHA256 over (version+timestamp+iv+ciphertext)
     9) AES-128-CBC decrypt + PKCS7 unpad
 */
+alert(`host=${location.hostname}\npath=${location.pathname}`);
 
 const MAGIC = new TextEncoder().encode("CSP1");
 const SALT_LEN = 16;
