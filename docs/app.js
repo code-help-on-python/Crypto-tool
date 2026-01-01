@@ -1,21 +1,30 @@
 "use strict";
 
-/* =========================
-   CryptoShield Web (client-side)
-   Matches Python backend:
-   - MAGIC = "CSP1"
-   - SALT_LEN = 16
-   - PBKDF2-HMAC-SHA256, 200,000 iterations
-   - Fernet token is stored as BYTES (which are ASCII base64url chars)
-   - Outer token is base64.urlsafe_b64encode(MAGIC + salt + fernet_token_bytes)
-   ========================= */
+/*
+  CryptoShield Web (client-side) - Python compatible
+
+  Outer token format:
+    payload = base64url( MAGIC("CSP1") + 16-byte salt + fernet_token_bytes )
+
+  Python's Fernet token is base64url ASCII bytes.
+  So in JS we must:
+    1) base64url-decode payload
+    2) verify MAGIC
+    3) extract salt
+    4) extract fernet_token_bytes_ascii
+    5) convert ascii bytes -> string, REMOVE WHITESPACE
+    6) base64url-decode fernet string -> raw fernet bytes
+    7) verify HMAC (SHA256) using signing key
+    8) AES-CBC decrypt using encryption key
+    9) PKCS7 unpad
+*/
 
 const MAGIC = new TextEncoder().encode("CSP1");
 const SALT_LEN = 16;
-const KDF_ITERS = 200000; // ✅ MUST match backend (Python uses 200_000) :contentReference[oaicite:1]{index=1}
+const KDF_ITERS = 200000; // ✅ MUST match Python (200_000)
 
-// Domain lock (deterrent only)
-const ALLOWED_HOSTS = ["code-help-on-python.github.io"];
+// Optional domain lock (deterrent)
+const ALLOWED_HOSTS = ["code-help-on-python.github.io", "localhost", "127.0.0.1"];
 const ALLOWED_PATH_PREFIX = "/Crypto-tool"; // no trailing slash
 
 // --- Elements ---
@@ -43,11 +52,13 @@ const togglePassButtons = document.querySelectorAll(".toggle-pass");
 const aboutOpen = document.getElementById("about-open");
 const aboutClose = document.getElementById("about-close");
 const aboutModal = document.getElementById("modal-about");
+
 const originModal = document.getElementById("origin-lock");
 
 function show(el) { if (el) el.hidden = false; }
 function hide(el) { if (el) el.hidden = true; }
 
+// --- Status helpers ---
 function setStatus(text, type) {
   statusEl.textContent = text;
   statusEl.classList.remove("ok", "err");
@@ -75,11 +86,8 @@ setTheme(safeLSGet(LS_THEME) === "dark" ? "dark" : "light");
 // --- Domain lock (deterrent only) ---
 function isLicensed() {
   if (!ALLOWED_HOSTS.includes(location.hostname)) return false;
-
-  // allow local dev anywhere
   if (location.hostname === "localhost" || location.hostname === "127.0.0.1") return true;
 
-  // enforce path on github pages
   return (
     location.pathname === ALLOWED_PATH_PREFIX ||
     location.pathname.startsWith(ALLOWED_PATH_PREFIX + "/")
@@ -95,7 +103,7 @@ if (!isLicensed()) {
 
 // --- Base64 helpers (urlsafe) ---
 function base64urlToBytes(str) {
-  const cleaned = (str || "").replace(/\s+/g, "");
+  const cleaned = (str || "").replace(/\s+/g, ""); // ✅ remove ALL whitespace
   const b64 = cleaned.replace(/-/g, "+").replace(/_/g, "/");
   const pad = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4));
   const raw = atob(b64 + pad);
@@ -110,7 +118,6 @@ function bytesToBase64Url(bytes) {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-// Fernet token bytes in Python are ASCII characters; decode to a JS string safely:
 function bytesToAscii(bytes) {
   let out = "";
   for (let i = 0; i < bytes.length; i += 1) out += String.fromCharCode(bytes[i]);
@@ -185,23 +192,26 @@ function parseFernetToken(raw) {
   return { iv, ciphertext, dataToSign, hmac };
 }
 
+// --- Payload handling (Python-compatible) ---
 async function decryptPayload(passphrase, payload) {
   if (!passphrase) throw new Error("Passphrase is required.");
   if (!payload) throw new Error("Token is required.");
 
-  const payloadBytes = base64urlToBytes(payload);
+  // ✅ remove ALL whitespace from outer payload
+  const payloadClean = String(payload).replace(/\s+/g, "");
+  const payloadBytes = base64urlToBytes(payloadClean);
+
   if (payloadBytes.length < MAGIC.length + SALT_LEN + 10) throw new Error("Invalid token format.");
 
-  // MAGIC check
   for (let i = 0; i < MAGIC.length; i += 1) {
     if (payloadBytes[i] !== MAGIC[i]) throw new Error("Invalid token format.");
   }
 
   const salt = payloadBytes.slice(MAGIC.length, MAGIC.length + SALT_LEN);
-  const fernetTokenBytesAscii = payloadBytes.slice(MAGIC.length + SALT_LEN);
+  const fernetAsciiBytes = payloadBytes.slice(MAGIC.length + SALT_LEN);
 
-  // Python stores Fernet token as BYTES of an ASCII base64url string. :contentReference[oaicite:2]{index=2}
-  const fernetStr = bytesToAscii(fernetTokenBytesAscii).trim();
+  // ✅ CRITICAL FIX: remove ALL whitespace inside the Fernet string too
+  const fernetStr = bytesToAscii(fernetAsciiBytes).replace(/\s+/g, "");
   const fernetRaw = base64urlToBytes(fernetStr);
 
   const keyBytes = await deriveKeyBytes(passphrase, salt);
@@ -209,11 +219,17 @@ async function decryptPayload(passphrase, payload) {
   const encryptionKey = keyBytes.slice(16, 32);
 
   const { iv, ciphertext, dataToSign, hmac } = parseFernetToken(fernetRaw);
+
   const ok = await verifyHmac(signingKey, dataToSign, hmac);
   if (!ok) throw new Error("Wrong password or corrupted token.");
 
-  const plaintextBytes = await decryptAesCbc(encryptionKey, iv, ciphertext);
-  return new TextDecoder().decode(plaintextBytes);
+  try {
+    const plaintextBytes = await decryptAesCbc(encryptionKey, iv, ciphertext);
+    return new TextDecoder().decode(plaintextBytes);
+  } catch (_) {
+    // ✅ Normalize padding failures (avoid confusing messages)
+    throw new Error("Wrong password or corrupted token.");
+  }
 }
 
 async function encryptPayload(passphrase, plaintext) {
@@ -228,13 +244,11 @@ async function encryptPayload(passphrase, plaintext) {
   const iv = crypto.getRandomValues(new Uint8Array(16));
   const ciphertext = await encryptAesCbc(encryptionKey, iv, new TextEncoder().encode(plaintext));
 
-  // timestamp 8 bytes big-endian
   const timestamp = Math.floor(Date.now() / 1000);
   let ts = BigInt(timestamp);
   const tsBytes = new Uint8Array(8);
   for (let i = 7; i >= 0; i -= 1) { tsBytes[i] = Number(ts & 0xffn); ts >>= 8n; }
 
-  // dataToSign = ver + ts + iv + ciphertext
   const dataToSign = new Uint8Array(1 + 8 + 16 + ciphertext.length);
   dataToSign[0] = 0x80;
   dataToSign.set(tsBytes, 1);
@@ -248,11 +262,11 @@ async function encryptPayload(passphrase, plaintext) {
   fernetRaw.set(dataToSign);
   fernetRaw.set(hmac, dataToSign.length);
 
-  // Python's f.encrypt returns ASCII base64url BYTES
+  // Fernet token as base64url ASCII bytes (like Python)
   const fernetStr = bytesToBase64Url(fernetRaw);
   const fernetAsciiBytes = new TextEncoder().encode(fernetStr);
 
-  // Outer payload matches Python: base64url(MAGIC + salt + tokenBytes) :contentReference[oaicite:3]{index=3}
+  // Outer payload: MAGIC + salt + fernet_token_bytes
   const payloadBytes = new Uint8Array(MAGIC.length + SALT_LEN + fernetAsciiBytes.length);
   payloadBytes.set(MAGIC, 0);
   payloadBytes.set(salt, MAGIC.length);
@@ -297,7 +311,7 @@ decryptBtn.addEventListener("click", async () => {
   decryptBtn.disabled = true;
 
   try {
-    const result = await decryptPayload(passphraseDecrypt.value.trim(), tokenInput.value.trim());
+    const result = await decryptPayload(passphraseDecrypt.value.trim(), tokenInput.value);
     outputBox.value = result;
     setStatus("Decrypted.", "ok");
   } catch (err) {

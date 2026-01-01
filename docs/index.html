@@ -3,17 +3,22 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Client-side CryptoShield encrypt/decrypt for CSP1 tokens. No server, no upload." />
+    <meta
+      name="description"
+      content="Client-side CryptoShield encrypt/decrypt for CSP1 tokens. No server, no upload."
+    />
 
-    <!-- CSP hardening (deterrent, not source protection) -->
-    <meta http-equiv="Content-Security-Policy"
-          content="default-src 'self';
-                   script-src 'self';
-                   style-src 'self';
-                   img-src 'self' data:;
-                   base-uri 'none';
-                   object-src 'none';
-                   connect-src 'none'">
+    <!-- Hardening only (does not hide source code) -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self';
+               script-src 'self';
+               style-src 'self';
+               img-src 'self' data:;
+               base-uri 'none';
+               object-src 'none';
+               connect-src 'none'"
+    />
 
     <title>CryptoShield Web</title>
     <link rel="stylesheet" href="styles.css" />
@@ -111,7 +116,8 @@
           <summary>Format details</summary>
           <p>
             Format: <code>base64url("CSP1" + 16-byte salt + fernet_token_bytes)</code>.
-            KDF: PBKDF2-HMAC-SHA256 (<strong>200,000</strong> iters). Fernet: AES-128-CBC + HMAC-SHA256.
+            KDF: PBKDF2-HMAC-SHA256 (<strong>200,000</strong> iters).
+            Fernet: AES-128-CBC + HMAC-SHA256.
           </p>
         </details>
 
@@ -136,7 +142,7 @@
       </div>
     </div>
 
-    <!-- Domain lock modal -->
+    <!-- Domain lock modal (deterrent only) -->
     <div id="origin-lock" class="modal-backdrop" hidden>
       <div class="modal warning" role="dialog" aria-modal="true" aria-labelledby="origin-title">
         <div class="modal-head">
