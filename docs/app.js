@@ -19,22 +19,23 @@
     8) verify HMAC-SHA256 over (version+timestamp+iv+ciphertext)
     9) AES-128-CBC decrypt + PKCS7 unpad
 */
-alert(`host=${location.hostname}\npath=${location.pathname}`);
-
 const MAGIC = new TextEncoder().encode("CSP1");
 const SALT_LEN = 16;
 const KDF_ITERS = 200000; // MUST match Python (200_000)
 
 const OFFICIAL_HOST = "code-help-on-python.github.io";
-const OFFICIAL_REPO = "Crypto-tool";
+const OFFICIAL_REPO = "crypto-tool"; // stored lower-case for case-insensitive compare
 
 function isLicensedOrigin() {
-  if (location.hostname !== OFFICIAL_HOST) return false;
+  // Normalize host to handle case-insensitive matches or trailing dots.
+  const host = location.hostname.replace(/\.$/, "").toLowerCase();
+  if (host !== OFFICIAL_HOST) return false;
 
-  // normalize: remove query/hash, ignore trailing slash, ignore index.html
+  // normalize: remove query/hash, ignore trailing slash, ignore index.html, compare case-insensitively
   const path = location.pathname
     .replace(/\/index\.html$/i, "")
-    .replace(/\/+$/g, "");
+    .replace(/\/+$/g, "")
+    .toLowerCase();
 
   return path === `/${OFFICIAL_REPO}` || path.startsWith(`/${OFFICIAL_REPO}/`);
 }
