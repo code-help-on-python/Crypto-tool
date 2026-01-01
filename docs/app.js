@@ -12,7 +12,7 @@
 
 const MAGIC = new TextEncoder().encode("CSP1");
 const SALT_LEN = 16;
-const KDF_ITERS = 200000; // ✅ MUST match backend (Python uses 200_000) :contentReference[oaicite:1]{index=1}
+const KDF_ITERS = 200_000; // ✅ MUST match backend (Python uses 200_000) :contentReference[oaicite:1]{index=1}
 
 // Domain lock (deterrent only)
 const ALLOWED_HOSTS = ["code-help-on-python.github.io", "localhost", "127.0.0.1"];
