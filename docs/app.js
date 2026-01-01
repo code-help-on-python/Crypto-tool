@@ -30,8 +30,12 @@ const OFFICIAL_REPO = "Crypto-tool";
 function isLicensedOrigin() {
   if (location.hostname !== OFFICIAL_HOST) return false;
 
-  // Accept ANY page under the repo
-  return location.pathname.startsWith(`/${OFFICIAL_REPO}`);
+  // normalize: remove query/hash, ignore trailing slash, ignore index.html
+  const path = location.pathname
+    .replace(/\/index\.html$/i, "")
+    .replace(/\/+$/g, "");
+
+  return path === `/${OFFICIAL_REPO}` || path.startsWith(`/${OFFICIAL_REPO}/`);
 }
 
 // ---- Storage / theme ----
