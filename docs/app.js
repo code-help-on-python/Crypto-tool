@@ -31,13 +31,19 @@ function isLicensedOrigin() {
   const host = location.hostname.replace(/\.$/, "").toLowerCase();
   if (host !== OFFICIAL_HOST) return false;
 
-  // normalize: remove query/hash, ignore trailing slash, ignore index.html, compare case-insensitively
+  // Normalize path: ignore query/hash, trailing slashes, and case.
+  // Allow both the repo subpath (project page) and site root (user/org page).
   const path = location.pathname
     .replace(/\/index\.html$/i, "")
     .replace(/\/+$/g, "")
     .toLowerCase();
 
-  return path === `/${OFFICIAL_REPO}` || path.startsWith(`/${OFFICIAL_REPO}/`);
+  return (
+    path === "" ||
+    path === "/" ||
+    path === `/${OFFICIAL_REPO}` ||
+    path.startsWith(`/${OFFICIAL_REPO}/`)
+  );
 }
 
 // ---- Storage / theme ----
