@@ -3,6 +3,10 @@
 /*
   CryptoShield Web (client-side) - Python compatible
 
+  IMPORTANT REALITY CHECK:
+  - Any JavaScript/HTML/CSS shipped to a browser can be viewed or copied by a determined user.
+  - The measures below are deterrents + UI hardening, NOT a true way to hide source code.
+
   Outer token format (CSP1):
     payload = base64url( "CSP1" + 16-byte salt + fernet_token_ascii_bytes )
 
@@ -23,29 +27,38 @@ const MAGIC = new TextEncoder().encode("CSP1");
 const SALT_LEN = 16;
 const KDF_ITERS = 200000; // MUST match Python (200_000)
 
-const OFFICIAL_HOST = "code-help-on-python.github.io";
-const OFFICIAL_REPO = "crypto-tool"; // stored lower-case for case-insensitive compare
+const ALLOWED_HOSTS = [
+  "code-help-on-python.github.io",
+  "localhost",
+  "127.0.0.1",
+];
+
+const ALLOWED_PATH_PREFIX = "/Crypto-tool"; // no trailing slash
 
 function isLicensedOrigin() {
-  // Normalize host to handle case-insensitive matches or trailing dots.
-  const officialHost = OFFICIAL_HOST.replace(/\.$/, "").toLowerCase();
-  const host = location.hostname.replace(/\.$/, "").toLowerCase();
-  if (host !== officialHost) return false;
+  const normalizeHost = (value) => String(value || "").replace(/\.$/, "").toLowerCase();
+  const normalizePath = (value) => {
+    let path = String(value || "/");
+    try { path = decodeURIComponent(path); } catch (_) {}
+    path = path
+      .replace(/\/index\.html$/i, "")
+      .replace(/\/+$/g, "")
+      .toLowerCase();
+    return path === "" ? "/" : path;
+  };
 
-  // Normalize path: ignore query/hash, trailing slashes, and case.
-  // Allow both the repo subpath (project page) and site root (user/org page).
-  const repo = OFFICIAL_REPO.replace(/^\/|\/$/g, "").toLowerCase();
-  let path = location.pathname || "/";
-  try { path = decodeURIComponent(path); } catch (_) {}
-  path = path
-    .replace(/\/index\.html$/i, "")
-    .replace(/\/+$/g, "")
-    .toLowerCase();
+  const host = normalizeHost(location.hostname);
+  const allowedHosts = ALLOWED_HOSTS.map((h) => normalizeHost(h));
+  if (!allowedHosts.includes(host)) return false;
 
-  if (path === "" || path === "/") return true;
+  if (host === "localhost" || host === "127.0.0.1") return true;
 
-  const repoRoot = `/${repo}`;
-  return path === repoRoot || path.startsWith(`${repoRoot}/`);
+  const path = normalizePath(location.pathname);
+  let prefix = normalizePath(ALLOWED_PATH_PREFIX);
+  if (!prefix.startsWith("/")) prefix = `/${prefix}`;
+  if (prefix === "/") return true;
+
+  return path === prefix || path.startsWith(`${prefix}/`);
 }
 
 // ---- Storage / theme ----
