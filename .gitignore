@@ -1,1 +1,3 @@
-LocalStaticSever.java -export-ignore
+# Local dev server (never commit)
+dev/LocalStaticServer.java
+dev/localdev.p12

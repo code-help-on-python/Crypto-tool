@@ -15,6 +15,7 @@ const ALLOWED_HOSTS = [
   "code-help-on-python.github.io",
   "localhost",
   "127.0.0.1",
+  "file:///Users/kushan/PycharmProjects/Crypto-tool/docs/index.html",
   // Example: "chanithacri.github.io",
   // Example: "your-custom-domain.com",
 ];
