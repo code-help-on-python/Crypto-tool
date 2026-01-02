@@ -1,3 +1,6 @@
 # Local dev server (never commit)
 dev/LocalStaticServer.java
 dev/localdev.p12
+dev/sever.py
+dev/key.pem
+dev/cert.pem

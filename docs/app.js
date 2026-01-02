@@ -32,6 +32,7 @@ const statusEl = document.getElementById("status");
 const decryptBtn = document.getElementById("decrypt");
 const copyBtn = document.getElementById("copy");
 const clearBtn = document.getElementById("clear");
+const killServerBtn = document.getElementById("kill-server");
 
 const passphraseEncrypt = document.getElementById("passphrase-encrypt");
 const plaintextInput = document.getElementById("plaintext");
@@ -104,6 +105,26 @@ function bytesToAscii(bytes) {
   let out = "";
   for (let i = 0; i < bytes.length; i += 1) out += String.fromCharCode(bytes[i]);
   return out;
+}
+function looksLikeBase64(bytes) {
+  for (let i = 0; i < bytes.length; i += 1) {
+    const ch = bytes[i];
+    if (ch === 0x09 || ch === 0x0a || ch === 0x0d || ch === 0x20) continue;
+    const isAlphaNum = (ch >= 0x30 && ch <= 0x39) || (ch >= 0x41 && ch <= 0x5a) || (ch >= 0x61 && ch <= 0x7a);
+    if (isAlphaNum) continue;
+    if (ch === 0x2d || ch === 0x5f || ch === 0x2b || ch === 0x2f || ch === 0x3d) continue;
+    return false;
+  }
+  return true;
+}
+function getTokenCandidates(tokenBytes) {
+  const candidates = [];
+  if (looksLikeBase64(tokenBytes)) {
+    const tokenStr = bytesToAscii(tokenBytes);
+    try { candidates.push(base64urlToBytes(tokenStr)); } catch (_) {}
+  }
+  candidates.push(tokenBytes);
+  return candidates;
 }
 
 // --- Crypto primitives ---
@@ -211,11 +232,11 @@ async function decryptPayload(passphrase, payload) {
   const tokenBytes = payloadBytes.slice(MAGIC.length + SALT_LEN);
 
   // tokenBytes are ASCII of the fernet base64url token string
-  const tokenStr = bytesToAscii(tokenBytes);
-  const tokenCandidates = [base64urlToBytes(tokenStr)];
+  const tokenCandidates = getTokenCandidates(tokenBytes);
 
   const { signingKey, encryptionKey } = await deriveKeys(passphrase, salt);
   let lastErr = null;
+  let authErr = null;
 
   for (const tokenRaw of tokenCandidates) {
     try {
@@ -226,9 +247,12 @@ async function decryptPayload(passphrase, payload) {
       return new TextDecoder().decode(plaintextBytes);
     } catch (err) {
       lastErr = err;
+      const msg = err instanceof Error ? err.message.toLowerCase() : "";
+      if (msg.includes("passphrase") || msg.includes("password") || msg.includes("corrupted")) authErr = err;
     }
   }
 
+  if (authErr) throw authErr;
   if (lastErr) throw lastErr;
   throw new Error("Wrong passphrase or corrupted token.");
 }
@@ -292,7 +316,7 @@ decryptBtn.addEventListener("click", async () => {
   decryptBtn.disabled = true;
 
   try {
-    const result = await decryptPayload(passphraseDecrypt.value.trim(), tokenInput.value.trim());
+    const result = await decryptPayload(passphraseDecrypt.value, tokenInput.value);
     outputBox.value = result;
     setStatus("Decrypted.", "ok");
   } catch (err) {
@@ -329,7 +353,7 @@ encryptBtn.addEventListener("click", async () => {
   encryptBtn.disabled = true;
 
   try {
-    const token = await encryptPayload(passphraseEncrypt.value.trim(), plaintextInput.value.trim());
+    const token = await encryptPayload(passphraseEncrypt.value, plaintextInput.value);
     tokenOut.value = token;
     setStatusEnc("Encrypted.", "ok");
   } catch (err) {
@@ -362,6 +386,24 @@ if (aboutClose && aboutModal) aboutClose.addEventListener("click", () => hide(ab
 if (aboutModal) {
   aboutModal.addEventListener("click", (e) => {
     if (e.target === aboutModal) hide(aboutModal);
+  });
+}
+
+// Kill server functionality
+if (killServerBtn) {
+  killServerBtn.addEventListener("click", async () => {
+    if (confirm("Are you sure you want to stop the server?")) {
+      try {
+        const response = await fetch("/kill");
+        if (response.ok) {
+          document.body.innerHTML = "<div style='text-align: center; padding: 50px;'><h1>Server stopped successfully</h1><p>You can close this window now.</p></div>";
+          setTimeout(() => window.close(), 2000);
+        }
+      } catch (error) {
+        console.error("Error stopping server:", error);
+        alert("Failed to stop server. You may need to close this window manually.");
+      }
+    }
   });
 }
 
