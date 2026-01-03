@@ -16,8 +16,6 @@ const IV_LEN = 16;
 // Domain/license gating (deterrent, not security)
 const ALLOWED_HOSTS = [
   "code-help-on-python.github.io",
-  "localhost",
-  "127.0.0.1",
 ];
 const ALLOWED_PATH_PREFIX = "/Crypto-tool"; // no trailing slash
 
