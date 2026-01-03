@@ -8,7 +8,7 @@
 
 const MAGIC = new TextEncoder().encode("CSP1");
 const SALT_LEN = 16; // If you changed this between versions, old tokens may fail unless decrypt tries multiple salt sizes.
-const ITERATIONS = 210000; // PBKDF2 iterations
+const ITERATIONS = 200000; // PBKDF2 iterations
 const KEY_LEN = 32;
 const HMAC_LEN = 32;
 const IV_LEN = 16;
@@ -86,6 +86,41 @@ function equalBytes(a, b) {
   return diff === 0;
 }
 
+function pkcs7Pad(bytes) {
+  const pad = IV_LEN - (bytes.length % IV_LEN);
+  const out = new Uint8Array(bytes.length + pad);
+  out.set(bytes);
+  out.fill(pad, bytes.length);
+  return out;
+}
+
+function pkcs7Unpad(bytes) {
+  if (bytes.length === 0) throw new Error("Invalid padding.");
+  const pad = bytes[bytes.length - 1];
+  if (pad < 1 || pad > IV_LEN) throw new Error("Invalid padding.");
+  for (let i = bytes.length - pad; i < bytes.length; i += 1) {
+    if (bytes[i] !== pad) throw new Error("Invalid padding.");
+  }
+  return bytes.slice(0, bytes.length - pad);
+}
+
+let aesCbcAutoPad = null;
+
+async function usesAesCbcAutoPadding() {
+  if (aesCbcAutoPad !== null) return aesCbcAutoPad;
+  try {
+    const keyBytes = new Uint8Array(16);
+    const iv = new Uint8Array(16);
+    const key = await crypto.subtle.importKey("raw", keyBytes, { name: "AES-CBC" }, false, ["encrypt"]);
+    const test = new Uint8Array([1, 2, 3]); // not a multiple of 16
+    await crypto.subtle.encrypt({ name: "AES-CBC", iv }, key, test);
+    aesCbcAutoPad = true;
+  } catch (_) {
+    aesCbcAutoPad = false;
+  }
+  return aesCbcAutoPad;
+}
+
 function getTokenCandidates(tokenBytes) {
   const candidates = [];
 
@@ -119,7 +154,7 @@ function getTokenCandidates(tokenBytes) {
   return unique;
 }
 
-async function pbkdf2(passphraseBytes, saltBytes, keyLen) {
+async function pbkdf2(passphraseBytes, saltBytes, keyLen, iterations) {
   const baseKey = await crypto.subtle.importKey(
     "raw",
     passphraseBytes,
@@ -132,7 +167,7 @@ async function pbkdf2(passphraseBytes, saltBytes, keyLen) {
       name: "PBKDF2",
       hash: "SHA-256",
       salt: saltBytes,
-      iterations: ITERATIONS,
+      iterations,
     },
     baseKey,
     keyLen * 8
@@ -140,11 +175,12 @@ async function pbkdf2(passphraseBytes, saltBytes, keyLen) {
   return new Uint8Array(bits);
 }
 
-async function deriveKeys(passphrase, saltBytes) {
+async function deriveKeys(passphrase, saltBytes, iterations, keyLen) {
   const passBytes = new TextEncoder().encode(passphrase);
-  const dk = await pbkdf2(passBytes, saltBytes, 64);
-  const signingKeyBytes = dk.slice(0, 32);
-  const encryptionKeyBytes = dk.slice(32, 64);
+  const dk = await pbkdf2(passBytes, saltBytes, keyLen, iterations);
+  const half = keyLen / 2;
+  const signingKeyBytes = dk.slice(0, half);
+  const encryptionKeyBytes = dk.slice(half, keyLen);
 
   const signingKey = await crypto.subtle.importKey(
     "raw",
@@ -183,29 +219,28 @@ function parseFernetToken(tokenRaw) {
 }
 
 async function verifyHmac(signingKey, data, expectedHmacBytes) {
-  const ok = await crypto.subtle.verify(
-    "HMAC",
-    signingKey,
-    expectedHmacBytes,
-    data
-  );
-  return ok;
+  const mac = await hmacSha256(signingKey, data);
+  return equalBytes(mac, expectedHmacBytes);
 }
 
 async function decryptFernet(encryptionKey, ivBytes, ciphertextBytes) {
+  const autoPad = await usesAesCbcAutoPadding();
   const plaintext = await crypto.subtle.decrypt(
     { name: "AES-CBC", iv: ivBytes },
     encryptionKey,
     ciphertextBytes
   );
-  return new Uint8Array(plaintext);
+  const out = new Uint8Array(plaintext);
+  return autoPad ? out : pkcs7Unpad(out);
 }
 
 async function encryptFernet(encryptionKey, ivBytes, plaintextBytes) {
+  const autoPad = await usesAesCbcAutoPadding();
+  const padded = autoPad ? plaintextBytes : pkcs7Pad(plaintextBytes);
   const ciphertext = await crypto.subtle.encrypt(
     { name: "AES-CBC", iv: ivBytes },
     encryptionKey,
-    plaintextBytes
+    padded
   );
   return new Uint8Array(ciphertext);
 }
@@ -217,11 +252,13 @@ async function hmacSha256(signingKey, data) {
 
 // Create CryptoShield wrapper: base64url( MAGIC + salt + fernetTokenStringBytes )
 async function encryptPayload(passphrase, plaintext) {
-  if (!passphrase) throw new Error("Passphrase is required.");
-  if (!plaintext) throw new Error("Plaintext is required.");
+  if (!passphrase || !String(passphrase).trim()) throw new Error("Passphrase is required.");
+  if (plaintext === undefined || plaintext === null || String(plaintext).length === 0) {
+    throw new Error("Plaintext is required.");
+  }
 
   const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
-  const { signingKey, encryptionKey } = await deriveKeys(passphrase, salt);
+  const { signingKey, encryptionKey } = await deriveKeys(passphrase, salt, ITERATIONS, KEY_LEN);
 
   const iv = crypto.getRandomValues(new Uint8Array(IV_LEN));
   const ptBytes = new TextEncoder().encode(plaintext);
@@ -254,8 +291,10 @@ async function encryptPayload(passphrase, plaintext) {
    ✅ FIXED + COMPATIBLE DECRYPT
    =========================== */
 async function decryptPayload(passphrase, payload) {
-  if (!passphrase) throw new Error("Passphrase is required.");
-  if (!payload) throw new Error("Token is required.");
+  if (!passphrase || !String(passphrase).trim()) throw new Error("Passphrase is required.");
+  if (payload === undefined || payload === null || String(payload).length === 0) {
+    throw new Error("Token is required.");
+  }
 
   const cleaned = String(payload).replace(/\s+/g, "");
   if (!cleaned.startsWith("Q1NQ")) {
@@ -274,6 +313,8 @@ async function decryptPayload(passphrase, payload) {
   // Backward/forward compatibility: try multiple salt lengths.
   // If SALT_LEN changed between builds, older tokens would otherwise fail with “Invalid token version”.
   const saltLensToTry = [SALT_LEN, 12, 16, 24, 32].filter((v, i, a) => a.indexOf(v) === i);
+  const iterationsToTry = [ITERATIONS, 200000, 210000].filter((v, i, a) => a.indexOf(v) === i);
+  const keyLensToTry = [KEY_LEN, 64].filter((v, i, a) => a.indexOf(v) === i);
 
   let lastErr = null;
   let authErr = null;
@@ -288,21 +329,25 @@ async function decryptPayload(passphrase, payload) {
     const candidates = getTokenCandidates(tokenBytes);
 
     try {
-      const { signingKey, encryptionKey } = await deriveKeys(passphrase, salt);
+      for (const iter of iterationsToTry) {
+        for (const keyLen of keyLensToTry) {
+          const { signingKey, encryptionKey } = await deriveKeys(passphrase, salt, iter, keyLen);
 
-      for (const tokenRaw of candidates) {
-        try {
-          const { iv, ciphertext, dataToSign, hmac } = parseFernetToken(tokenRaw);
-          const ok = await verifyHmac(signingKey, dataToSign, hmac);
-          if (!ok) throw new Error("Wrong passphrase or corrupted token.");
+          for (const tokenRaw of candidates) {
+            try {
+              const { iv, ciphertext, dataToSign, hmac } = parseFernetToken(tokenRaw);
+              const ok = await verifyHmac(signingKey, dataToSign, hmac);
+              if (!ok) throw new Error("Wrong passphrase or corrupted token.");
 
-          const plaintextBytes = await decryptFernet(encryptionKey, iv, ciphertext);
-          return new TextDecoder().decode(plaintextBytes);
-        } catch (err) {
-          lastErr = err;
-          const msg = err instanceof Error ? err.message.toLowerCase() : "";
-          if (msg.includes("passphrase") || msg.includes("password") || msg.includes("corrupted") || msg.includes("hmac")) {
-            authErr = err;
+              const plaintextBytes = await decryptFernet(encryptionKey, iv, ciphertext);
+              return new TextDecoder().decode(plaintextBytes);
+            } catch (err) {
+              lastErr = err;
+              const msg = err instanceof Error ? err.message.toLowerCase() : "";
+              if (msg.includes("passphrase") || msg.includes("password") || msg.includes("corrupted") || msg.includes("hmac")) {
+                authErr = err;
+              }
+            }
           }
         }
       }
@@ -437,7 +482,7 @@ if (decryptBtn) {
 
     try {
       const result = await decryptPayload(
-        passphraseDecrypt ? passphraseDecrypt.value.trim() : "",
+        passphraseDecrypt ? passphraseDecrypt.value : "",
         tokenInput ? tokenInput.value : ""
       );
       if (outputBox) outputBox.value = result;
@@ -480,8 +525,8 @@ if (encryptBtn) {
 
     try {
       const token = await encryptPayload(
-        passphraseEncrypt ? passphraseEncrypt.value.trim() : "",
-        plaintextInput ? plaintextInput.value.trim() : ""
+        passphraseEncrypt ? passphraseEncrypt.value : "",
+        plaintextInput ? plaintextInput.value : ""
       );
       if (tokenOut) tokenOut.value = token;
       setStatusEnc("Encrypted.", "ok");
