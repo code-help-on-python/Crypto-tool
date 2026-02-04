@@ -16,6 +16,7 @@ const IV_LEN = 16;
 // Domain/license gating (deterrent, not security)
 const ALLOWED_HOSTS = [
   "code-help-on-python.github.io",
+   "cryptoshield-tool.netlify.app",
 ];
 const ALLOWED_PATH_PREFIX = "/Crypto-tool"; // no trailing slash
 
