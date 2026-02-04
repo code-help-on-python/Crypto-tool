@@ -18,7 +18,7 @@ const ALLOWED_HOSTS = [
   "code-help-on-python.github.io",
    "cryptoshield-tool.netlify.app",
 ];
-const ALLOWED_PATH_PREFIX = "/Crypto-tool"; // no trailing slash
+const ALLOWED_PATH_PREFIX = "/Crypto-tool" or "/cryptoshield-tool"; // no trailing slash
 
 function isLicensedOrigin() {
   const normalizeHost = (value) => String(value || "").replace(/\.$/, "").toLowerCase();
